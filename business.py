@@ -4,9 +4,10 @@ from datetime import datetime, timedelta
 import os
 
 # --- Configuration ---
-st.set_page_config(page_title="Business POS Dashboard", page_icon="🏢", layout="wide")
+st.set_page_config(page_title="Aven POS Dashboard", page_icon="🏪", layout="wide")
 
 DB_FILE = "business.json"
+st.sidebar.image("logo.png", use_container_width=True)
 
 def load_data():
     if os.path.exists(DB_FILE):
@@ -29,178 +30,256 @@ data = st.session_state.data
 # Edit করার জন্য টেম্পোরারি স্টেট
 if "edit_mode" not in st.session_state:
     st.session_state.edit_mode = False
-    st.session_state.edit_name = ""
-    st.session_state.edit_qty = 0
-    st.session_state.edit_b_price = 0.0
-    st.session_state.edit_s_price = 0.0
+if "edit_index" not in st.session_state:
+    st.session_state.edit_index = -1
 
-# --- Sidebar ---
-st.sidebar.title("🏢 Navigation")
-menu = st.sidebar.radio("Go To", ["📈 Financial Report", "📦 Inventory Management", "🛒 Point of Sale (POS)"])
+# --- Navigation ---
+st.sidebar.title("🏪 Aven POS Navigation")
+page = st.sidebar.radio("Go to:", ["📊 Dashboard & Analytics", "📦 Stock Management", "🛒 Sales POS", "📜 Sales History"])
 
-# --- 1. FINANCIAL REPORT (With Today, Weekly, Monthly & Lifetime Filter) ---
-if menu == "📈 Financial Report":
-    st.title("📊 Business Financial Report")
+# --- Helper Functions for Calculations ---
+def get_stock_dict():
+    return {item["name"]: item for item in data["stock"]}
+
+# --- PAGE 1: DASHBOARD & ANALYTICS ---
+if page == "📊 Dashboard & Analytics":
+    st.title("📊 Aven POS Dashboard & Analytics")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        report_type = st.selectbox("Select Report Period", ["Today's Summary", "Weekly Summary", "Monthly Summary", "Lifetime Summary"])
+    # Time Filters
+    filter_option = st.selectbox("Select Time Range:", ["Today", "Last 7 Days", "This Month", "All Time"])
     
     now = datetime.now()
-    today_str = now.strftime("%Y-%m-%d")
-    
-    total_sales = 0
-    total_cost = 0
-    filtered_sales = []
+    sales_filtered = []
     
     for sale in data["sales"]:
-        # বিক্রির তারিখ থেকে শুধু দিন-মাস-বছর আলাদা করা (যেমন: '2026-06-03 13:16' থেকে '2026-06-03')
-        sale_date_str = sale.get("date", "").split(" ")[0]
         try:
-            sale_date = datetime.strptime(sale_date_str, "%Y-%m-%d")
+            sale_date = datetime.strptime(sale["date"], "%Y-%m-%d %H:%M:%S")
         except:
-            continue
-            
-        # ফিল্টারিং লজিক
-        if report_type == "Today's Summary" and sale_date_str != today_str:
-            continue
-        elif report_type == "Weekly Summary" and (now - sale_date).days > 7:
-            continue
-        elif report_type == "Monthly Summary" and (now - sale_date).days > 30:
-            continue
-            
-        total_sales += sale["sell_price"] * sale["quantity"]
-        total_cost += sale["buying_price"] * sale["quantity"]
-        filtered_sales.append(sale)
-        
-    net_profit = total_sales - total_cost
+            try:
+                sale_date = datetime.strptime(sale["date"], "%Y-%m-%d")
+            except:
+                continue
+                
+        if filter_option == "Today" and sale_date.date() == now.date():
+            sales_filtered.append(sale)
+        elif filter_option == "Last 7 Days" and sale_date >= now - timedelta(days=7):
+            sales_filtered.append(sale)
+        elif filter_option == "This Month" and sale_date.month == now.month and sale_date.year == now.year:
+            sales_filtered.append(sale)
+        elif filter_option == "All Time":
+            sales_filtered.append(sale)
 
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total Revenue", f"{total_sales:,.2f} BDT")
-    m2.metric("Total Cost", f"{total_cost:,.2f} BDT")
+    # Metrics Calculations
+    total_sales_revenue = sum(s["total_price"] for s in sales_filtered)
+    total_items_sold = sum(s["quantity"] for s in sales_filtered)
     
-    if net_profit >= 0:
-        m3.metric("Net Profit 💚", f"{net_profit:,.2f} BDT")
-    else:
-        m3.metric("Net Loss 💔", f"{abs(net_profit):,.2f} BDT", delta_color="inverse")
+    # Calculate Total Profit
+    stock_dict = get_stock_dict()
+    total_profit = 0
+    for s in sales_filtered:
+        if s["name"] in stock_dict:
+            buy_price = stock_dict[s["name"]]["buy_price"]
+            profit_per_item = s["sell_price"] - buy_price
+            total_profit += profit_per_item * s["quantity"]
 
-    st.subheader("📝 Sales Log")
-    if filtered_sales:
-        st.table(filtered_sales)
-    else:
-        st.info(f"No sales recorded for {report_type.lower()}.")
+    # Top KPI Cards
+    col1, col2, col3 = st.columns(3)
+    col1.metric("💰 Total Revenue (BDT)", f"{total_sales_revenue:,.2f} tk")
+    col2.metric("📈 Total Net Profit (BDT)", f"{total_profit:,.2f} tk")
+    col3.metric("🛒 Total Items Sold", total_items_sold)
 
-# --- 2. INVENTORY MANAGEMENT (With Smooth Edit & Delete) ---
-elif menu == "📦 Inventory Management":
-    st.title("📋 Stock & Inventory Control")
+    st.markdown("---")
     
-    with st.form("stock_form", clear_on_submit=True):
+    # Stock Summary View
+    st.subheader("📦 Quick Stock Alert & Summary")
+    if data["stock"]:
+        stock_df = []
+        for item in data["stock"]:
+            status = "✅ In Stock"
+            if item["quantity"] <= 0:
+                status = "❌ Out of Stock"
+            elif item["quantity"] <= 5:
+                status = "⚠️ Low Stock"
+                
+            stock_df.append({
+                "Product Name": item["name"],
+                "Quantity Left": item["quantity"],
+                "Buying Price (tk)": f"{item['buy_price']:.2f}",
+                "Selling Price (tk)": f"{item['sell_price']:.2f}",
+                "Status": status
+            })
+        st.table(stock_df)
+    else:
+        st.info("No items in stock yet. Go to Stock Management to add items.")
+
+# --- PAGE 2: STOCK MANAGEMENT ---
+elif page == "📦 Stock Management":
+    st.title("📦 Stock & Product Management")
+    
+    # Form to Add/Edit Product
+    st.subheader("📝 Add / Edit Product Information")
+    with st.form("product_form", clear_on_submit=True):
         if st.session_state.edit_mode:
-            st.subheader(f"📝 Editing Product: {st.session_state.edit_name.capitalize()}")
+            st.warning(f"Editing Product: {data['stock'][st.session_state.edit_index]['name']}")
+            default_name = data["stock"][st.session_state.edit_index]["name"]
+            default_qty = data["stock"][st.session_state.edit_index]["quantity"]
+            default_buy = data["stock"][st.session_state.edit_index]["buy_price"]
+            default_sell = data["stock"][st.session_state.edit_index]["sell_price"]
+            button_label = "Update Product"
         else:
-            st.subheader("➕ Add New Product")
-            
-        name = st.text_input("Product Name", value=st.session_state.edit_name).strip().lower()
-        quantity = st.number_input("Quantity", min_value=0, step=1, value=st.session_state.edit_qty)
-        b_price = st.number_input("Buying Price (BDT)", min_value=0.0, value=st.session_state.edit_b_price)
-        s_price = st.number_input("Selling Price (BDT)", min_value=0.0, value=st.session_state.edit_s_price)
+            default_name = ""
+            default_qty = 0
+            default_buy = 0.0
+            default_sell = 0.0
+            button_label = "Add Product to Stock"
+
+        prod_name = st.text_input("Product Name:", value=default_name)
+        prod_qty = st.number_input("Quantity:", min_value=0, step=1, value=default_qty)
+        prod_buy = st.number_input("Buying Price per item (BDT):", min_value=0.0, step=0.5, value=default_buy)
+        prod_sell = st.number_input("Selling Price per item (BDT):", min_value=0.0, step=0.5, value=default_sell)
         
-        btn_label = "Save Changes" if st.session_state.edit_mode else "Add to Inventory"
+        submitted = st.form_submit_with_button(button_label)
         
-        if st.form_submit_button(btn_label):
-            if name:
-                updated = False
-                for item in data["stock"]:
-                    if item["name"] == name:
-                        item["quantity"] = quantity
-                        item["buying_price"] = b_price
-                        item["selling_price"] = s_price
-                        updated = True
-                        break
-                if not updated:
-                    data["stock"].append({"name": name, "quantity": quantity, "buying_price": b_price, "selling_price": s_price})
+        if submitted:
+            if not prod_name:
+                st.error("Product name cannot be empty!")
+            elif prod_sell < prod_buy:
+                st.error("Selling price should not be less than buying price!")
+            else:
+                if st.session_state.edit_mode:
+                    # Update Existing
+                    data["stock"][st.session_state.edit_index] = {
+                        "name": prod_name,
+                        "quantity": prod_qty,
+                        "buy_price": prod_buy,
+                        "sell_price": prod_sell
+                    }
+                    st.success(f"Product '{prod_name}' updated successfully!")
+                    st.session_state.edit_mode = False
+                    st.session_state.edit_index = -1
+                else:
+                    # Check if duplicate name
+                    existing_names = [i["name"].lower() for i in data["stock"]]
+                    if prod_name.lower() in existing_names:
+                        st.error("Product with this name already exists! Please edit the existing item instead.")
+                    else:
+                        # Add New
+                        data["stock"].append({
+                            "name": prod_name,
+                            "quantity": prod_qty,
+                            "buy_price": prod_buy,
+                            "sell_price": prod_sell
+                        })
+                        st.success(f"Product '{prod_name}' added to stock!")
                 
                 save_data(data)
-                
-                # এডিট মোড রিসেট করা
-                st.session_state.edit_mode = False
-                st.session_state.edit_name = ""
-                st.session_state.edit_qty = 0
-                st.session_state.edit_b_price = 0.0
-                st.session_state.edit_s_price = 0.0
-                
-                st.success("Inventory Updated Successfully!")
                 st.rerun()
 
-    st.subheader("📦 Current Stock List")
+    if st.session_state.edit_mode:
+        if st.button("Cancel Edit"):
+            st.session_state.edit_mode = False
+            st.session_state.edit_index = -1
+            st.rerun()
+
+    st.markdown("---")
+    st.subheader("📋 Current Inventory List")
+    
     if data["stock"]:
         for idx, item in enumerate(data["stock"]):
-            col1, col2, col3, col4, col5, col6 = st.columns([3, 2, 2, 2, 1, 1])
-            col1.write(f"**{item['name'].capitalize()}**")
-            col2.write(f"Stock: {item['quantity']}")
-            col3.write(f"Buy: {item['buying_price']} BDT")
-            col4.write(f"Sell: {item['selling_price']} BDT")
+            col1, col2, col3, col4, col5, col6 = st.columns([3, 1, 1.5, 1.5, 1, 1])
+            col1.write(f"**{item['name']}**")
+            col2.write(f"Qty: {item['quantity']}")
+            col3.write(f"Buy: {item['buy_price']} tk")
+            col4.write(f"Sell: {item['sell_price']} tk")
             
-            # Edit Button (📝)
-            if col5.button("📝", key=f"edit_{idx}"):
+            if col5.button("✏️ Edit", key=f"edit_{idx}"):
                 st.session_state.edit_mode = True
-                st.session_state.edit_name = item["name"]
-                st.session_state.edit_qty = item["quantity"]
-                st.session_state.edit_b_price = item["buying_price"]
-                st.session_state.edit_s_price = item["selling_price"]
+                st.session_state.edit_index = idx
                 st.rerun()
                 
-            # Delete Button (❌)
-            if col6.button("❌", key=f"del_{idx}"):
-                data["stock"].pop(idx)
+            if col6.button("🗑️ Delete", key=f"del_{idx}"):
+                deleted_name = data["stock"].pop(idx)["name"]
                 save_data(data)
+                st.success(f"Deleted '{deleted_name}' from inventory.")
                 st.rerun()
     else:
         st.info("Inventory is empty.")
 
-# --- 3. POINT OF SALE (POS) ---
-elif menu == "🛒 Point of Sale (POS)":
-    st.title("🛒 Sales Counter")
+# --- PAGE 3: SALES POS ---
+elif page == "🛒 Sales POS":
+    st.title("🛒 Sales Point of Sale (POS)")
+    
     if not data["stock"]:
-        st.warning("Add products first!")
+        st.warning("Please add products to your stock before starting sales!")
     else:
-        product_names = [i["name"].capitalize() for i in data["stock"] if i["quantity"] > 0]
-        with st.form("sale_form"):
-            choice = st.selectbox("Select Product", product_names).lower()
-            item = next(i for i in data["stock"] if i["name"] == choice)
-            qty = st.number_input(f"Qty (Max: {item['quantity']})", min_value=1, max_value=item["quantity"])
-            price = st.number_input("Selling Price", value=item["selling_price"])
-            cust = st.text_input("Customer Name") or "Guest"
-            phone = st.text_input("Customer Phone") or "N/A"
+        stock_dict = get_stock_dict()
+        available_products = [item["name"] for item in data["stock"] if item["quantity"] > 0]
+        
+        if not available_products:
+            st.error("All products are currently OUT OF STOCK! Please update stock levels.")
+        else:
+            st.subheader("New Instant Sale Transaction")
             
-            if st.form_submit_button("Complete Sale"):
-                item["quantity"] -= qty
-                curr_date = datetime.now().strftime("%Y-%m-%d %H:%M")
-                data["sales"].append({
-                    "date": curr_date,
-                    "name": choice, "quantity": qty, "sell_price": price, 
-                    "buying_price": item["buying_price"], "customer": cust, "phone": phone
-                })
-                save_data(data)
-                st.success("Sold!")
+            selected_product = st.selectbox("Select Product to Sell:", available_products)
+            max_qty = stock_dict[selected_product]["quantity"]
+            st.info(f"Available Quantity in Stock: {max_qty} units | Standard Price: {stock_dict[selected_product]['sell_price']} tk")
+            
+            sell_qty = st.number_input("Quantity to Sell:", min_value=1, max_value=max_qty, step=1, value=1)
+            custom_price = st.number_input("Custom Selling Price per unit (BDT) [Optional]:", 
+                                           min_value=0.0, 
+                                           value=float(stock_dict[selected_product]['sell_price']), 
+                                           step=0.5)
+            
+            total_payable = sell_qty * custom_price
+            st.markdown(f"### 💰 Total Payable Amount: **{total_payable:,.2f} tk**")
+            
+            if st.button("✅ Complete Sale & Print Entry"):
+                # Deduct inventory qty
+                for item in data["stock"]:
+                    if item["name"] == selected_product:
+                        item["quantity"] -= sell_qty
+                        break
                 
-                # ক্যাশ মেমো রিসিট
-                st.markdown("### 📄 CASH MEMO / RECEIPT")
-                st.code(f"""
-==========================================
-             CASH MEMO
-==========================================
-Date/Time: {curr_date}
-Customer : {cust}
-Phone    : {phone}
-------------------------------------------
-Item     : {choice.capitalize()}
-Quantity : {qty} pcs
-Unit Price: {price:.2f} BDT
-------------------------------------------
-TOTAL PAID: {price * qty:.2f} BDT
-==========================================
-        Thank you for shopping!
-==========================================
-                """)
-                st.balloons()
+                # Record the sale log
+                sale_entry = {
+                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "name": selected_product,
+                    "quantity": sell_qty,
+                    "sell_price": custom_price,
+                    "total_price": total_payable
+                }
+                data["sales"].append(sale_entry)
+                
+                save_data(data)
+                st.success(f"Sale successful! Sold {sell_qty} units of '{selected_product}'. Stock automatically updated.")
+                st.rerun()
+
+# --- PAGE 4: SALES HISTORY ---
+elif page == "📜 Sales History":
+    st.title("📜 Sales Records & Invoice History")
+    
+    if data["sales"]:
+        # Inverse order to see latest sales first
+        reversed_sales = list(reversed(data["sales"]))
+        
+        sales_log_table = []
+        for idx, sale in enumerate(reversed_sales):
+            sales_log_table.append({
+                "Date & Time": sale["date"],
+                "Item Name": sale["name"],
+                "Qty Sold": sale["quantity"],
+                "Price/Unit (tk)": f"{sale['sell_price']:.2f}",
+                "Total Paid (tk)": f"{sale['total_price']:.2f}"
+            })
+            
+        st.table(sales_log_table)
+        
+        st.markdown("---")
+        if st.button("🗑️ Clear Entire Sales History Log"):
+            if st.checkbox("Yes, I am absolutely sure I want to wipe out all data permanently."):
+                data["sales"] = []
+                save_data(data)
+                st.success("All historical sales entries wiped successfully!")
+                st.rerun()
+    else:
+        st.info("No sales transactions recorded yet.")
