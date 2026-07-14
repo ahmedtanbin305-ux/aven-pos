@@ -1,248 +1,204 @@
 import streamlit as st
 import json
-from datetime import datetime, timedelta
 import os
+from datetime import datetime
 
-# --- Configuration ---
-st.set_page_config(page_title="Aven POS Dashboard", page_icon="🏪", layout="wide")
+# ফাইলের নাম (যেখানে ডেটা স্থায়ীভাবে জমা থাকবে)
+DATA_FILE = "trades.json"
 
-DB_FILE = "business.json"
-st.sidebar.image("logo.png", use_container_width=True)
-
+# ডেটা লোড করার ফাংশন
 def load_data():
-    if os.path.exists(DB_FILE):
+    if os.path.exists(DATA_FILE):
         try:
-            with open(DB_FILE, "r") as f:
+            with open(DATA_FILE, "r") as f:
                 return json.load(f)
         except:
             pass
-    return {"stock": [], "sales": []}
+    return {"products": {}, "sales": []}
 
+# ডেটা সেভ করার ফাংশন
 def save_data(data):
-    with open(DB_FILE, "w") as f:
+    with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-if "data" not in st.session_state:
-    st.session_state.data = load_data()
+# অ্যাপের মেইন ডেটা লোড
+data = load_data()
 
-data = st.session_state.data
+# --- অ্যাপের টাইটেল ও লোগো ---
+st.set_page_config(page_title="Aven POS Dashboard", page_icon="🛍️", layout="wide")
+st.title("🛍️ Aven POS & Business Dashboard")
+st.subheader("আপনার ব্র্যান্ডের ডিজিটাল হিসাব খাতা")
 
-# Edit করার জন্য টেম্পোরারি স্টেট
-if "edit_mode" not in st.session_state:
-    st.session_state.edit_mode = False
-if "edit_index" not in st.session_state:
-    st.session_state.edit_index = -1
+# ৩টি আলাদা ট্যাবে অ্যাপটি ভাগ করা হয়েছে
+tab1, tab2, tab3 = st.tabs(["📊 ড্যাশবোর্ড ও সেলস", "📦 প্রোডাক্ট ম্যানেজমেন্ট", "✏️ ভুল সংশোধন (Edit Panel)"])
 
-# --- Navigation ---
-st.sidebar.title("🏪 Aven POS Navigation")
-page = st.sidebar.radio("Go to:", ["📊 Dashboard & Analytics", "📦 Stock Management", "🛒 Sales POS", "📜 Sales History"])
-
-# --- Helper Functions for Calculations ---
-def get_stock_dict():
-    return {f"{item['name']} (Size: {item.get('size', 'N/A')})": item for item in data["stock"]}
-
-# --- PAGE 1: DASHBOARD & ANALYTICS ---
-if page == "📊 Dashboard & Analytics":
-    st.title("📊 Aven POS Dashboard & Analytics")
+# ==========================================
+# TAB 1: ড্যাশবোর্ড ও সেলস (Sales Entry)
+# ==========================================
+with tab1:
+    st.header("📈 নতুন বিক্রি এবং বর্তমান অবস্থা")
     
-    filter_option = st.selectbox("Select Time Range:", ["Today", "Last 7 Days", "This Month", "All Time"])
+    # বর্তমান স্টকের ওপর ভিত্তি করে টোটাল হিসাব
+    total_products = len(data["products"])
+    total_sales_count = len(data["sales"])
+    total_revenue = sum(sale["total_price"] for sale in data["sales"])
     
-    now = datetime.now()
-    sales_filtered = []
-    
-    for sale in data["sales"]:
-        try:
-            sale_date = datetime.strptime(sale["date"], "%Y-%m-%d %H:%M:%S")
-        except:
-            try:
-                sale_date = datetime.strptime(sale["date"], "%Y-%m-%d")
-            except:
-                continue
-                
-        if filter_option == "Today" and sale_date.date() == now.date():
-            sales_filtered.append(sale)
-        elif filter_option == "Last 7 Days" and sale_date >= now - timedelta(days=7):
-            sales_filtered.append(sale)
-        elif filter_option == "This Month" and sale_date.month == now.month and sale_date.year == now.year:
-            sales_filtered.append(sale)
-        elif filter_option == "All Time":
-            sales_filtered.append(sale)
-
-    total_sales_revenue = sum(s["total_price"] for s in sales_filtered)
-    total_items_sold = sum(s["quantity"] for s in sales_filtered)
-    
-    stock_dict = get_stock_dict()
-    total_profit = 0
-    for s in sales_filtered:
-        sale_key = f"{s['name']} (Size: {s.get('size', 'N/A')})"
-        if sale_key in stock_dict:
-            buy_price = stock_dict[sale_key]["buy_price"]
-            profit_per_item = s["sell_price"] - buy_price
-            total_profit += profit_per_item * s["quantity"]
-
+    # ওপরের ক্যাশ কাউন্টার
     col1, col2, col3 = st.columns(3)
-    col1.metric("💰 Total Revenue (BDT)", f"{total_sales_revenue:,.2f} tk")
-    col2.metric("📈 Total Net Profit (BDT)", f"{total_profit:,.2f} tk")
-    col3.metric("🛒 Total Items Sold", total_items_sold)
-
+    col1.metric("মোট প্রোডাক্ট প্রকার", f"{total_products} টি")
+    col2.metric("মোট বিক্রির সংখ্যা", f"{total_sales_count} টি")
+    col3.metric("মোট আয় (Revenue)", f"{total_revenue:,.2f} টাকা")
+    
     st.markdown("---")
+    st.subheader("🛒 নতুন বিক্রির এন্ট্রি দিন")
     
-    st.subheader("📦 Quick Stock Alert & Summary")
-    if data["stock"]:
-        stock_df = []
-        for item in data["stock"]:
-            status = "✅ In Stock"
-            if item["quantity"] <= 0:
-                status = "❌ Out of Stock"
-            elif item["quantity"] <= 5:
-                status = "⚠️ Low Stock"
-                
-            stock_df.append({
-                "Product Code": item.get("code", "N/A"),
-                "Product Name": item["name"],
-                "Size": item.get("size", "N/A"),
-                "Quantity Left": item["quantity"],
-                "Buying Price (tk)": f"{item['buy_price']:.2f}",
-                "Selling Price (tk)": f"{item['sell_price']:.2f}",
-                "Status": status
-            })
-        st.table(stock_df)
-    else:
-        st.info("No items in stock yet.")
-
-# --- PAGE 2: STOCK MANAGEMENT ---
-elif page == "📦 Stock Management":
-    st.title("📦 Stock & Product Management")
-    
-    st.subheader("🔍 Instant Code Search")
-    search_code = st.text_input("Enter Product Code to check stock instantly:", placeholder="Type code...").strip()
-    
-    if search_code:
-        found_item = None
-        for item in data["stock"]:
-            if str(item.get("code", "")).lower() == search_code.lower():
-                found_item = item
-                break
+    if data["products"]:
+        available_products = [p for p, info in data["products"].items() if info["stock"] > 0]
         
-        if found_item:
-            st.success(f"🎉 Product Found!")
-            sc1, sc2, sc3, sc4, sc5 = st.columns(5)
-            sc1.metric("Product Name", found_item["name"])
-            sc2.metric("Size", found_item.get("size", "N/A"))
-            sc3.metric("Available Stock", f"{found_item['quantity']} units")
-            sc4.metric("Selling Price", f"{found_item['sell_price']} tk")
-            if found_item["quantity"] <= 0: sc5.error("🔴 Out of Stock")
-            elif found_item["quantity"] <= 5: sc5.warning("🟡 Low Stock")
-            else: sc5.info("🟢 In Stock")
-        else:
-            st.error(f"❌ No product found with Code: '{search_code}'")
+        if available_products:
+            c1, c2 = st.columns(2)
+            with c1:
+                selected_p = st.selectbox("প্রোডাক্ট সিলেক্ট করুন:", available_products)
+            with c2:
+                max_stock = data["products"][selected_p]["stock"]
+                qty = st.number_input(f"পরিমাণ (স্টকে আছে: {max_stock}টি):", min_value=1, max_value=max_stock, value=1)
+                
+            price_per_unit = data["products"][selected_p]["price"]
+            total_cost = qty * price_per_unit
+            st.info(f"💰 প্রতি পিস: {price_per_unit} টাকা | মোট বিল: {total_cost} টাকা")
             
-    st.markdown("---")
-    
-    st.subheader("📝 Add / Edit Product Information")
-    with st.form("product_form", clear_on_submit=True):
-        if st.session_state.edit_mode:
-            st.warning(f"Editing: {data['stock'][st.session_state.edit_index]['name']}")
-            default_code = data["stock"][st.session_state.edit_index].get("code", "")
-            default_name = data["stock"][st.session_state.edit_index]["name"]
-            default_size = data["stock"][st.session_state.edit_index].get("size", "")
-            default_qty = data["stock"][st.session_state.edit_index]["quantity"]
-            default_buy = data["stock"][st.session_state.edit_index]["buy_price"]
-            default_sell = data["stock"][st.session_state.edit_index]["sell_price"]
-            button_label = "Update Product"
+            if st.button("বিক্রি নিশ্চিত করুন (Sell)"):
+                # স্টক কমানো
+                data["products"][selected_p]["stock"] -= qty
+                # সেলস হিস্ট্রিতে যোগ করা
+                new_sale = {
+                    "product": selected_p,
+                    "quantity": qty,
+                    "total_price": total_cost,
+                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                data["sales"].append(new_sale)
+                save_data(data)
+                st.success(f"🎉 {selected_p} সফলভাবে বিক্রি হয়েছে!")
+                st.rerun()
         else:
-            default_code, default_name, default_size = "", "", ""
-            default_qty, default_buy, default_sell = 0, 0.0, 0.0
-            button_label = "Add Product to Stock"
-
-        prod_code = st.text_input("Product Code / Barcode:", value=default_code).strip()
-        col_n, col_s = st.columns([3, 1])
-        prod_name = col_n.text_input("Product Name:", value=default_name)
-        prod_size = col_s.text_input("Size (e.g. M, 42):", value=default_size).strip()
-        prod_qty = st.number_input("Quantity:", min_value=0, step=1, value=default_qty)
-        prod_buy = st.number_input("Buying Price (BDT):", min_value=0.0, step=0.5, value=default_buy)
-        prod_sell = st.number_input("Selling Price (BDT):", min_value=0.0, step=0.5, value=default_sell)
-        
-        # CORRECTED LINE BELOW
-        submitted = st.form_submit_button(button_label)
-        
-        if submitted:
-            if not prod_code or not prod_name:
-                st.error("Code and Name are required!")
-            else:
-                final_size = prod_size if prod_size else "N/A"
-                new_item = {"code": prod_code, "name": prod_name, "size": final_size, "quantity": prod_qty, "buy_price": prod_buy, "sell_price": prod_sell}
-                
-                if st.session_state.edit_mode:
-                    data["stock"][st.session_state.edit_index] = new_item
-                    st.session_state.edit_mode = False
-                    st.session_state.edit_index = -1
-                else:
-                    data["stock"].append(new_item)
-                
-                save_data(data)
-                st.rerun()
-
-    if st.session_state.edit_mode and st.button("Cancel Edit"):
-        st.session_state.edit_mode = False
-        st.rerun()
-
-    st.markdown("---")
-    st.subheader("📋 Inventory List")
-    if data["stock"]:
-        for idx, item in enumerate(data["stock"]):
-            col0, col1, col_sz, col2, col3, col4, col5, col6 = st.columns([1.5, 2, 0.8, 0.8, 1.2, 1.2, 0.5, 0.5])
-            col0.write(f"`{item.get('code', 'N/A')}`")
-            col1.write(f"**{item['name']}**")
-            col_sz.write(f"{item.get('size', 'N/A')}")
-            col2.write(f"Qty: {item['quantity']}")
-            col3.write(f"{item['buy_price']} tk")
-            col4.write(f"{item['sell_price']} tk")
-            if col5.button("✏️", key=f"edit_{idx}"):
-                st.session_state.edit_mode, st.session_state.edit_index = True, idx
-                st.rerun()
-            if col6.button("🗑️", key=f"del_{idx}"):
-                data["stock"].pop(idx)
-                save_data(data)
-                st.rerun()
-
-# --- PAGE 3: SALES POS ---
-elif page == "🛒 Sales POS":
-    st.title("🛒 Sales Point of Sale (POS)")
-    if not data["stock"]:
-        st.warning("Please add stock first!")
+            st.warning("⚠️ দুঃখিত, সব প্রোডাক্টের স্টক শেষ! প্রোডাক্ট ম্যানেজমেন্ট ট্যাব থেকে স্টক বাড়ান।")
     else:
-        options = [f"[{i.get('code','N/A')}] {i['name']} (Size: {i.get('size','N/A')})" for i in data["stock"] if i["quantity"] > 0]
-        if not options:
-            st.error("Out of Stock!")
-        else:
-            selected = st.selectbox("Search Product:", options)
-            # Find original index
-            target_idx = -1
-            for idx, item in enumerate(data["stock"]):
-                if f"[{item.get('code','N/A')}] {item['name']} (Size: {item.get('size','N/A')})" == selected:
-                    target_idx = idx
-                    break
-            
-            item = data["stock"][target_idx]
-            qty = st.number_input("Qty:", min_value=1, max_value=item["quantity"], value=1)
-            price = st.number_input("Price:", min_value=0.0, value=float(item['sell_price']))
-            st.write(f"### Total: {qty * price:,.2f} tk")
-            if st.button("✅ Complete Sale"):
-                data["stock"][target_idx]["quantity"] -= qty
-                data["sales"].append({"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "name": item["name"], "size": item.get("size","N/A"), "quantity": qty, "sell_price": price, "total_price": qty * price})
-                save_data(data)
-                st.success("Sold!")
-                st.rerun()
+        st.info("💡 এখনো কোনো প্রোডাক্ট যোগ করা হয়নি। আগে প্রোডাক্ট ম্যানেজমেন্ট ট্যাবে গিয়ে প্রোডাক্ট অ্যাড করুন।")
 
-# --- PAGE 4: SALES HISTORY ---
-elif page == "📜 Sales History":
-    st.title("📜 Sales Records")
+    st.markdown("---")
+    st.subheader("📜 সাম্প্রতিক বিক্রির ইতিহাস (Sales Log)")
     if data["sales"]:
-        st.table(list(reversed(data["sales"])))
-        if st.button("🗑️ Clear History") and st.checkbox("Confirm"):
-            data["sales"] = []
-            save_data(data)
-            st.rerun()
+        st.table(data["sales"][::-1])
     else:
-        st.info("No records.")
+        st.text("এখনো কোনো বিক্রির রেকর্ড নেই।")
+
+# ==========================================
+# TAB 2: প্রোডাক্ট ম্যানেজমেন্ট (Stock Entry)
+# ==========================================
+with tab2:
+    st.header("📦 নতুন প্রোডাক্ট যোগ করুন")
+    
+    with st.form("add_product_form"):
+        p_name = st.text_input("প্রোডাক্টের নাম (যেমন: Aven Premium T-Shirt):").strip()
+        p_price = st.number_input("বিক্রয় মূল্য (Price per unit):", min_value=0.0, step=50.0)
+        p_stock = st.number_input("স্টক পরিমাণ (Stock Quantity):", min_value=0, step=1)
+        
+        submit_btn = st.form_submit_button("স্টকে যোগ করুন")
+        
+        if submit_btn:
+            if p_name:
+                if p_name in data["products"]:
+                    data["products"][p_name]["stock"] += p_stock
+                    data["products"][p_name]["price"] = p_price 
+                else:
+                    data["products"][p_name] = {"price": p_price, "stock": p_stock}
+                
+                save_data(data)
+                st.success(f"🎉 '{p_name}' সফলভাবে স্টকে আপডেট করা হয়েছে!")
+                st.rerun()
+            else:
+                st.error("⚠️ দয়া করে প্রোডাক্টের একটি নাম দিন!")
+
+    st.markdown("---")
+    st.subheader("📋 বর্তমান ইনভেন্টরি / স্টক লিস্ট")
+    if data["products"]:
+        inv_data = [{"প্রোডাক্টের নাম": name, "মূল্য (টাকা)": info["price"], "চলতি স্টক": info["stock"]} for name, info in data["products"].items()]
+        st.dataframe(inv_data, use_container_width=True)
+    else:
+        st.text("স্টক একদম খালি।")
+
+# ==========================================
+# TAB 3: ভুল সংশোধন (Edit & Delete Panel)
+# ==========================================
+with tab3:
+    st.header("✏️ এডিট এবং ডিলিট প্যানেল (ভুল সংশোধন)")
+    
+    edit_choice = st.radio("কোনটি সংশোধন বা ডিলিট করতে চান?", ["প্রোডাক্ট তথ্য", "বিক্রির হিসাব"])
+    
+    if edit_choice == "প্রোডাক্ট তথ্য":
+        if data["products"]:
+            all_prods = list(data["products"].keys())
+            select_edit_p = st.selectbox("কোন প্রোডাক্টের তথ্য পরিবর্তন করবেন?", all_prods)
+            
+            curr_p_info = data["products"][select_edit_p]
+            
+            edit_p_name = st.text_input("প্রোডাক্টের নাম সংশোধন:", value=select_edit_p)
+            edit_p_price = st.number_input("মূল্য সংশোধন:", value=float(curr_p_info["price"]))
+            edit_p_stock = st.number_input("স্টক সংশোধন:", value=int(curr_p_info["stock"]))
+            
+            c_update, c_delete = st.columns(2)
+            with c_update:
+                if st.button("🔄 তথ্য আপডেট করুন", use_container_width=True):
+                    if edit_p_name != select_edit_p:
+                        del data["products"][select_edit_p]
+                    data["products"][edit_p_name] = {"price": edit_p_price, "stock": edit_p_stock}
+                    save_data(data)
+                    st.success("🎉 প্রোডাক্টের তথ্য সফলভাবে আপডেট হয়েছে!")
+                    st.rerun()
+            
+            with c_delete:
+                if st.button("🗑️ প্রোডাক্টটি পুরো ডিলিট করুন", key="del_prod", use_container_width=True):
+                    del data["products"][select_edit_p]
+                    save_data(data)
+                    st.warning(f"❌ '{select_edit_p}' ইনভেন্টরি থেকে ডিলিট করা হয়েছে!")
+                    st.rerun()
+        else:
+            st.info("সংশোধন করার মতো কোনো প্রোডাক্ট নেই।")
+            
+    elif edit_choice == "বিক্রির হিসাব":
+        if data["sales"]:
+            sales_list = [f"ID: {i} | {s['product']} - {s['quantity']}টি | সময়: {s['date']}" for i, s in enumerate(data["sales"])]
+            select_edit_s = st.selectbox("কোন বিক্রির এন্ট্রিটি সংশোধন/ডিলিট করবেন?", sales_list)
+            
+            s_id = int(select_edit_s.split("|")[0].replace("ID:", "").strip())
+            curr_sale_info = data["sales"][s_id]
+            
+            st.warning(f"📊 বর্তমান এন্ট্রি: {curr_sale_info['product']} x {curr_sale_info['quantity']} = {curr_sale_info['total_price']} টাকা")
+            
+            edit_s_qty = st.number_input("সঠিক পরিমাণ (Quantity):", min_value=1, value=int(curr_sale_info["quantity"]))
+            
+            p_current_price = data["products"].get(curr_sale_info["product"], {}).get("price", curr_sale_info["total_price"]/curr_sale_info["quantity"])
+            edit_s_total = edit_s_qty * p_current_price
+            
+            c_s_update, c_s_delete = st.columns(2)
+            with c_s_update:
+                if st.button("🔄 বিক্রির হিসাব সংশোধন করুন", use_container_width=True):
+                    data["sales"][s_id]["quantity"] = edit_s_qty
+                    data["sales"][s_id]["total_price"] = edit_s_total
+                    save_data(data)
+                    st.success("🎉 বিক্রির হিসাব সংশোধন করা হয়েছে!")
+                    st.rerun()
+                    
+            with c_s_delete:
+                if st.button("🗑️ এই বিক্রির এন্ট্রি ডিলিট করুন", key="del_sale", use_container_width=True):
+                    p_name_back = curr_sale_info["product"]
+                    if p_name_back in data["products"]:
+                        data["products"][p_name_back]["stock"] += curr_sale_info["quantity"]
+                    
+                    data["sales"].pop(s_id)
+                    save_data(data)
+                    st.warning("❌ বিক্রির এন্ট্রিটি ডিলিট করা হয়েছে এবং স্টক ফেরত দেওয়া হয়েছে!")
+                    st.rerun()
+        else:
+            st.info("সংশোধন করার মতো কোনো বিক্রির ইতিহাস নেই।")
